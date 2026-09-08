@@ -841,13 +841,14 @@ function leadingCode(title) {
  * 遍历响应 data，判断对象的 n 是否以番号开头（不区分大小写）
  * 返回 { ok, exists, searchValue, matches? }
  */
-async function searchExistingMovies(title) {
-  const code = leadingCode(title);
-  if (!code) return { ok: true, exists: false, searchValue: "" };
+async function searchExistingMovies(title, code) {
+  // 优先使用内容脚本传来的权威番号（sav-id 文本）；否则从标题最前面解析
+  const finalCode = (code && String(code).trim()) || leadingCode(title);
+  if (!finalCode) return { ok: true, exists: false, searchValue: "" };
   const q = new URLSearchParams({
     offset: "0",
     limit: "30",
-    search_value: code,
+    search_value: finalCode,
     date: "",
     aid: "1",
     cid: "0",
@@ -860,7 +861,7 @@ async function searchExistingMovies(title) {
   try {
     const json = await requestJson("https://webapi.115.com/files/search?" + q.toString());
     const data = Array.isArray(json && json.data) ? json.data : [];
-    const codeLower = code.toLowerCase();
+    const codeLower = finalCode.toLowerCase();
     const matches = data.filter((it) => String(it.n || "").toLowerCase().startsWith(codeLower));
     // 用户规范（115 data 字段）：
     //  - fid 存在且非空 → 文件，dp 为其父目录名称
@@ -872,13 +873,13 @@ async function searchExistingMovies(title) {
     });
     await appendLog(
       "info",
-      "115查重：番号=" + code + "，搜索结果 " + data.length + " 条，匹配 " + matches.length + " 条" +
+      "115查重：番号=" + finalCode + "，搜索结果 " + data.length + " 条，匹配 " + matches.length + " 条" +
         (matchesInfo.length && matchesInfo[0].dirName ? "，所在目录=" + matchesInfo[0].dirName : "")
     );
     return {
       ok: true,
       exists: matches.length > 0,
-      searchValue: code,
+      searchValue: finalCode,
       matches: matchesInfo,
     };
   } catch (e) {
@@ -1001,7 +1002,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === "searchExisting") {
-    searchExistingMovies(String(msg.title || ""))
+    searchExistingMovies(String(msg.title || ""), String(msg.code || ""))
       .then(sendResponse)
       .catch((e) => sendResponse({ ok: false, error: String(e && e.message ? e.message : e) }));
     return true;

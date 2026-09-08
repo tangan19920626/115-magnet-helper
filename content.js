@@ -108,6 +108,18 @@
   }
 
   /**
+   * 获取页面上权威的番号（用户规范）：javdb/javbus 的 <savdiv class="sav-id"> 文本，
+   * 如 "START-602"。比从整串标题里解析更可靠（标题末尾可能是演员名等干扰）。
+   */
+  function getSavIdCode() {
+    const el = document.querySelector(".sav-id");
+    if (!el) return "";
+    const t = (el.textContent || "").trim();
+    const m = t.match(/^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*/);
+    return m ? m[0] : t;
+  }
+
+  /**
    * 站点专属标题候选（用户规范）：
    *  - javdb.com：<h2 class="title is-4"> 内含 <savdiv class="sav-id infoExistent">（番号）与
    *    <strong class="current-title">（影片标题），取 h2 完整文本 → "AKDLD-363 【...】若葉結希"
@@ -1033,7 +1045,7 @@
   }
 
   /**
-   * 查重：用标题最前面的字母-数字（番号）查询 115，
+   * 查重：用页面权威番号（sav-id）查询 115，
    * 已存在 → 红色「番号xxx已存在[于xxx中]」；未保存 → 蓝色「番号xxx未保存」
    */
   async function checkMovieExists(title) {
@@ -1042,7 +1054,7 @@
     if (!title) return;
     let res = null;
     try {
-      res = await sendMessage({ type: "searchExisting", title });
+      res = await sendMessage({ type: "searchExisting", title, code: getSavIdCode() });
     } catch (e) {
       res = null;
     }
@@ -1191,21 +1203,28 @@
   sendMessage({ type: "get115Cookies" }).catch(() => {});
 
   // 页面加载完成后立刻分析并查重（用户规范）：
-  // 已存在 → 红底「番号xxx已存在」；未保存 → 蓝底「番号xxx未保存」；
+  // 已存在 → 红底「番号xxx已存在[于xxx中]」；未保存 → 蓝底「番号xxx未保存」；
   // 未出结果前保持「分析」（点击仍可正常分析）
+  // 页面可能延迟渲染 sav-id/标题：重试最多 5 次（每次 1 秒）直到拿到权威番号
   (async () => {
     try {
-      const title = getContentTitle();
-      if (!title) return;
-      const res = await sendMessage({ type: "searchExisting", title });
+      let title = getContentTitle();
+      let code = getSavIdCode();
+      for (let i = 0; i < 5 && !code; i++) {
+        await new Promise((r) => setTimeout(r, 1000));
+        title = getContentTitle();
+        code = getSavIdCode();
+      }
+      if (!title && !code) return;
+      const res = await sendMessage({ type: "searchExisting", title, code });
       if (res && res.ok) {
-        const code = res.searchValue || "";
-        fab.title = "点击仍可分析（" + title + "）";
+        const outCode = res.searchValue || "";
+        fab.title = "点击仍可分析（" + (title || "") + "）";
         if (res.exists) {
-          fab.textContent = formatExistsText(code, res);
+          fab.textContent = formatExistsText(outCode, res);
           fab.className = "m115-fab exists";
         } else {
-          fab.textContent = "番号" + code + "未保存";
+          fab.textContent = "番号" + outCode + "未保存";
           fab.className = "m115-fab missing";
         }
       }
@@ -1261,16 +1280,17 @@
       (async () => {
         try {
           const title = getContentTitle();
-          if (!title) return;
-          const res = await sendMessage({ type: "searchExisting", title });
+          const code = getSavIdCode();
+          if (!title && !code) return;
+          const res = await sendMessage({ type: "searchExisting", title, code });
           if (res && res.ok) {
-            const code = res.searchValue || "";
-            fab.title = "点击仍可分析（" + title + "）";
+            const outCode = res.searchValue || "";
+            fab.title = "点击仍可分析（" + (title || "") + "）";
             if (res.exists) {
-              fab.textContent = formatExistsText(code, res);
+              fab.textContent = formatExistsText(outCode, res);
               fab.className = "m115-fab exists";
             } else {
-              fab.textContent = "番号" + code + "未保存";
+              fab.textContent = "番号" + outCode + "未保存";
               fab.className = "m115-fab missing";
             }
           }
