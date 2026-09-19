@@ -47,7 +47,9 @@
      下载中列表没有本次任务 → 改 `stat=11` 查询已完成任务，若 `url` 匹配 → 下载完成，取 `delete_file_id`；
      两个列表都没有 → 提示**下载失败**；
    - **按 delete_file_id 重命名**：在「云下载」目录中按任务的 `delete_file_id`（作为文件 id）
-     定位下载产物——**目录** → 进入并重命名其中最大的文件，然后**将该文件移动到云下载目录**；
+     定位下载产物——**目录** → 进入并重命名其中最大的文件，然后**将该文件移动到云下载目录**，
+     再**删除这个已空的下载目录**（`POST https://webapi.115.com/rb/delete`，
+     参数 `pid=<该目录的父目录id>`、`fid[0]=<该目录id>`、`ignore_warn=1`）；
      **文件** → 直接重命名该文件（已在云下载目录，无需移动）
      （`POST webapi.115.com/files/batch_rename` 重命名，`POST webapi.115.com/files/move`
      移动，参数 `pid=<云下载cid>`、`fid[0]=<文件fid>`）；

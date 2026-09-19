@@ -465,7 +465,14 @@ async function listFiles(cid) {
     // 用户规范：data 中对象有 uid 的是文件，没有 uid 的是目录
     const hasUid = f.uid !== undefined && f.uid !== null && f.uid !== "";
     const isDir = !hasUid;
-    return { fid: isDir ? cid2 : fid, cid: cid2, n: f.n || "", s: Number(f.s) || 0, isDir };
+    return {
+      fid: isDir ? cid2 : fid,       // 目录用 cid 作为自身 id；文件用 fid
+      cid: cid2,
+      pid: String(f.pid || ""),      // 父目录 id（删除目录时作为 pid 参数）
+      n: f.n || "",
+      s: Number(f.s) || 0,
+      isDir,
+    };
   });
 }
 
@@ -552,6 +559,34 @@ async function moveFiles(pid, fileIds) {
     body.append("pid", String(pid));
     (fileIds || []).forEach((fid, i) => body.append("fid[" + i + "]", String(fid)));
     const json = await requestJson("https://webapi.115.com/files/move", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
+      body: body.toString(),
+    });
+    const state = json && json.state;
+    const success = state === true || state === 1 || state === "1" || state === "true";
+    return {
+      ok: success,
+      error_msg: success ? "" : ((json && json.error_msg) || (json && json.error) || "未知错误"),
+      data: json,
+    };
+  } catch (e) {
+    return { ok: false, error_msg: e && e.message ? e.message : String(e) };
+  }
+}
+
+/**
+ * 删除文件/目录（移入回收站，用户规范）
+ * POST https://webapi.115.com/rb/delete
+ * 参数：pid=<该目录的父目录id>，fid[0]=<要删除的目录/文件id>，ignore_warn=1
+ */
+async function deleteFiles(pid, fileIds) {
+  try {
+    const body = new URLSearchParams();
+    if (pid) body.append("pid", String(pid));
+    (fileIds || []).forEach((fid, i) => body.append("fid[" + i + "]", String(fid)));
+    body.append("ignore_warn", "1");
+    const json = await requestJson("https://webapi.115.com/rb/delete", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
       body: body.toString(),
@@ -774,21 +809,36 @@ async function renameFileById(yunDirCid, fileId, pageTitle, magnetName, tabId) {
     return;
   }
   if (target.isDir) {
-    // 目录：进入并重命名其中最大的文件，然后移动到云下载目录
+    // 目录：进入并重命名其中最大的文件 → 移动到云下载目录 → 删除该已空目录
     await appendLog(
       "info",
-      "delete_file_id 对应目录：「" + target.n + "」（cid=" + target.fid + "），重命名其中最大文件"
+      "delete_file_id 对应目录：「" + target.n + "」（cid=" + target.fid + "，pid=" + (target.pid || "") + "），重命名其中最大文件"
     );
     notifyTab(tabId, { type: "jobUpdate", ok: true, text: "115下载完成，进入目录：「" + target.n + "」" });
     const r = await renameLargestFileInDir(target.fid, pageTitle, magnetName, tabId, "");
     if (r && r.ok && r.fid) {
-      // 重命名成功后，把该文件移动到云下载目录（用户规范第 1 点）
+      // 1) 重命名成功后，把该文件移动到云下载目录（用户规范第 1 点）
       const mv = await moveFiles(yunDirCid, [r.fid]);
       await appendLog(
         mv.ok ? "ok" : "error",
         "移动重命名后的文件到云下载目录：" + (mv.ok ? "成功" : "失败：" + mv.error_msg)
       );
       notifyTab(tabId, { type: "jobUpdate", ok: mv.ok, text: mv.ok ? "文件已移动到云下载目录" : "文件移动失败：" + mv.error_msg });
+      // 2) 文件已移出 → 删除该下载目录（pid=父目录id，fid[0]=该目录id）
+      if (mv.ok) {
+        const parentPid = target.pid || yunDirCid;
+        const del = await deleteFiles(parentPid, [target.fid]);
+        await appendLog(
+          del.ok ? "ok" : "error",
+          "删除已空的下载目录「" + target.n + "」（pid=" + parentPid + "，fid=" + target.fid + "）：" +
+            (del.ok ? "成功" : "失败：" + del.error_msg)
+        );
+        notifyTab(tabId, {
+          type: "jobUpdate",
+          ok: del.ok,
+          text: del.ok ? "已删除空的下载目录：" + target.n : "删除下载目录失败：" + del.error_msg,
+        });
+      }
     }
     return;
   }
