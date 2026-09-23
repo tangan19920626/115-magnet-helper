@@ -112,45 +112,102 @@
    * 如 "START-602"。比从整串标题里解析更可靠（标题末尾可能是演员名等干扰）。
    */
   function getSavIdCode() {
-    const el = document.querySelector(".sav-id");
-    if (!el) return "";
-    const t = (el.textContent || "").trim();
-    const m = t.match(/^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*/);
-    return m ? m[0] : t;
+    for (const el of document.querySelectorAll(".sav-id")) {
+      if (!isVisibleEl(el)) continue; // 跳过隐藏的番号元素（display:none）
+      const t = (el.textContent || "").trim();
+      const m = t.match(/^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*/);
+      if (m) return m[0];
+      if (t) return t;
+    }
+    return "";
+  }
+
+  /**
+   * 元素是否可见（用户规范）：带 display:none 或其祖先被隐藏的元素不参与标题解析。
+   * 用 getClientRects 判断，可同时覆盖自身 display:none 与隐藏祖先的情况。
+   */
+  function isVisibleEl(el) {
+    try {
+      if (!el || typeof el.getClientRects !== "function") return false;
+      return el.getClientRects().length > 0;
+    } catch (e) {
+      return true; // 判断出错时不排除，避免误伤
+    }
+  }
+
+  /**
+   * 取元素内「可见文本」（用户规范）：递归拼接文本节点，跳过 display:none 的后代
+   * 以及 script/style/noscript。textContent 会把隐藏元素（如 javdb 的
+   * <span class="origin-title" style="display:none">）的文字也算进来，必须避免。
+   */
+  function visibleTextOf(el) {
+    if (!el || !isVisibleEl(el)) return "";
+    let out = "";
+    const walk = (node) => {
+      for (const child of node.childNodes) {
+        if (child.nodeType === 3) {
+          out += child.nodeValue || "";
+        } else if (child.nodeType === 1) {
+          const tag = child.tagName;
+          if (tag === "SCRIPT" || tag === "STYLE" || tag === "NOSCRIPT") continue;
+          if (!isVisibleEl(child)) continue;
+          walk(child);
+        }
+      }
+    };
+    try {
+      walk(el);
+    } catch (e) {
+      return "";
+    }
+    return out.replace(/\s+/g, " ").trim();
   }
 
   /**
    * 站点专属标题候选（用户规范）：
-   *  - javdb.com：<h2 class="title is-4"> 内含 <savdiv class="sav-id infoExistent">（番号）与
-   *    <strong class="current-title">（影片标题），取 h2 完整文本 → "AKDLD-363 【...】若葉結希"
+   *  - javdb.com：格式为「番号 + 标题内容」，即同容器内
+   *    <savdiv class="sav-id">（番号，如 IPX-883）+ <strong class="current-title">（标题）→
+   *    "IPX-883 ズボラ義理姉の…加美杏奈"；取文本时只拼接可见后代，
+   *    display:none 的 origin-title / 顯示原標題 不计入
    *  - javbus.com：<h3> 内含 <savdiv class="sav-id infoFirst">（番号）+ 标题文字，
-   *    取 h3 完整文本 → "START-607 おねだり...恋渕ももな"
-   *  - 优先使用真实标题标签（h1~h6）内的完整文本（用户规范：先确认 h2，其层级最少）；
-   *    只有不存在标题标签候选时才回退到父元素（避免把列表页 div.video-title 等
-   *    过长的文字当成标题）
-   *  - 只保留「以字母/数字开头」的内容（组合后以番号开头，自然满足）
+   *    取 h3 的可见文本 → "START-607 おねだり...恋渕ももな"
+   *  - 优先级：番号+标题组合（javdb）→ 标题标签(h1~h6)可见文本 → 父元素可见文本
+   *  - 只保留「以字母/数字开头」的容器候选（组合后以番号开头）
    */
   function getSiteSpecificTitleCandidates() {
     const clean = (s) => String(s || "").replace(/\s+/g, " ").trim();
-    const headingBased = [];
-    const nonHeading = [];
-    // 找到 .current-title 或 .sav-id 元素：
-    //  - 在标题标签（h1~h6）内 → 取该标题标签的完整文本（最高优先级）
-    //  - 不在标题标签内 → 仅当没有标题标签候选时才回退取其父元素文本
-    for (const sel of [".current-title", ".sav-id"]) {
-      for (const el of document.querySelectorAll(sel)) {
-        const heading = el.closest("h1,h2,h3,h4,h5,h6");
-        const container = heading || el.parentElement;
-        if (!container) continue;
-        const t = clean(container.textContent);
-        if (t && /^[A-Za-z0-9]/.test(t)) {
-          (heading ? headingBased : nonHeading).push(t);
-        }
+    const withCode = [];      // 番号 + 标题内容（javdb）
+    const headingBased = [];  // 标题标签(h1~h6)的可见文本
+    const nonHeading = [];    // 父元素可见文本（列表页兜底）
+
+    // 1) .current-title：取自身可见文本，并在前面补上同一容器内的番号 → "IPX-883 标题"
+    for (const el of document.querySelectorAll(".current-title")) {
+      if (!isVisibleEl(el)) continue;
+      let t = clean(visibleTextOf(el));
+      if (!t) continue;
+      const heading = el.closest("h1,h2,h3,h4,h5,h6");
+      const scope = heading || el.parentElement || document;
+      const savEl = scope.querySelector ? scope.querySelector(".sav-id") : null;
+      const code = savEl && isVisibleEl(savEl) ? clean(visibleTextOf(savEl)) : "";
+      if (code && t.indexOf(code) !== 0) t = code + " " + t;
+      withCode.push(t);
+    }
+    // 2) .sav-id 所在标题标签 / 父元素的可见文本（javbus h3 等）
+    for (const el of document.querySelectorAll(".sav-id")) {
+      if (!isVisibleEl(el)) continue;
+      const heading = el.closest("h1,h2,h3,h4,h5,h6");
+      const container = heading || el.parentElement;
+      if (!container || !isVisibleEl(container)) continue;
+      const t = clean(visibleTextOf(container));
+      if (t && /^[A-Za-z0-9]/.test(t)) {
+        (heading ? headingBased : nonHeading).push(t);
       }
     }
     const dedupe = (arr) => arr.filter((t, i) => arr.indexOf(t) === i);
-    // 优先标题标签候选；不存在时（如列表页）才用父元素候选
-    return dedupe(headingBased).length ? dedupe(headingBased) : dedupe(nonHeading);
+    // 优先「番号 + 标题」；其次标题标签；最后父元素
+    if (dedupe(withCode).length) return dedupe(withCode);
+    if (dedupe(headingBased).length) return dedupe(headingBased);
+    return dedupe(nonHeading);
   }
 
   /**
@@ -228,12 +285,12 @@
    * 按优先级收集候选文本——站点专属（sav-id / current-title 所在标题容器）→
    * title 类元素 / 标题元素 / 普通链接 / 文本块。
    * 下载链接（magnet / ed2k）相关的文字一律不作为标题候选（避免 ed2k 磁力变成标题），
+   * display:none（或隐藏祖先内）的元素也不解析（用户规范），
    * 每类取最长的一个，按优先级返回。
    */
   function getContentTitle() {
     const clean = (s) => String(s || "").replace(/\s+/g, " ").trim();
     const isTitleLike = (t) => t.length >= 4 && t.length <= 300 && /^[A-Za-z0-9]/.test(t);
-    const isShortTitleLike = (t) => t.length >= 3 && t.length <= 300 && /^[A-Za-z0-9]/.test(t);
     // 下载链接特征：ed2k 文件链接 / magnet 链接
     const isDownloadish = (t) => /ed2k:\/\/\|file\|/i.test(t) || /^magnet:\?/i.test(t);
 
@@ -243,26 +300,30 @@
     const linkTexts = [];
     const blockTexts = [];
 
-    // 1) title/name 类元素
+    // 1) title/name 类元素（跳过 display:none 的）
     for (const el of document.querySelectorAll(
       '[id*="title" i], [class*="title" i], [itemprop="name"], [class*="subject" i], [class*="name" i]'
     )) {
+      if (!isVisibleEl(el)) continue;
       const t = clean(el.textContent);
       if (t) titleElTexts.push(t);
     }
-    // 2) 标题元素
+    // 2) 标题元素（跳过 display:none 的）
     for (const el of document.querySelectorAll("h1,h2,h3,h4,h5,h6")) {
+      if (!isVisibleEl(el)) continue;
       const t = clean(el.textContent);
       if (t) headingTexts.push(t);
     }
-    // 3) 普通链接文字（排除 magnet/ed2k 下载链接）
+    // 3) 普通链接文字（排除 magnet/ed2k 下载链接与隐藏元素）
     for (const a of document.querySelectorAll("a")) {
       if (/^(magnet|ed2k):/i.test(a.getAttribute("href") || "")) continue;
+      if (!isVisibleEl(a)) continue;
       const t = clean(a.textContent);
       if (t) linkTexts.push(t);
     }
-    // 4) 文本块
+    // 4) 文本块（跳过 display:none 的）
     for (const el of document.querySelectorAll("p, td, li, article, section")) {
+      if (!isVisibleEl(el)) continue;
       const t = clean(el.textContent);
       if (t) blockTexts.push(t);
     }
@@ -272,8 +333,11 @@
         .filter(filter || isTitleLike)
         .filter((t) => !isDownloadish(t))
         .sort((a, b) => b.length - a.length)[0] || "";
+    // 站点专属标题（.current-title 自身文本 / sav-id 所在容器可见文本）：
+    // 不强制以字母/数字开头（javdb 的真实标题可能是日文等），仅限制长度
+    const isSiteTitle = (t) => t.length >= 3 && t.length <= 300;
     return (
-      longest(siteTexts, isShortTitleLike) ||
+      longest(siteTexts, isSiteTitle) ||
       longest(titleElTexts) ||
       longest(headingTexts) ||
       longest(linkTexts) ||

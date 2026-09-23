@@ -8,15 +8,16 @@
    - 未保存 → 按钮变为**蓝底「番号xxx未保存」**；
    - 点击按钮仍可正常分析；
 3. **分析**：点击右上角「分析」按钮后：
-   - 从**网页内容**中获取「以字母/数字开头的完整标题」（不使用浏览器标签页标题）。
-     候选优先级：站点专属（javdb.com：**优先 `<h2 class="title is-4">` 结构**（层级最少），
-     内含 `savdiv.sav-id`（番号）+ `strong.current-title`（标题），取 h2 完整文本如
-     "AKDLD-363 【...】若葉結希"，只有不存在标题标签候选时才回退父元素，避免列表页
-     `div.video-title` 等过长文字被当标题；
-     javbus.com：`<h3>` 内的 `savdiv.sav-id` + 标题文字，取 h3 完整文本如
-     "START-607 おねだり...恋渕ももな"；两者都只保留以字母/数字开头的内容）→
-     title 类元素 / 标题元素 / 链接文字 / 文本块，显示在弹框最上面；
-   - **115 查重**：用标题最前面的字母-数字（番号，如 `MIAB-481`）GET 调用
+   - 从**网页内容**中获取完整标题（不使用浏览器标签页标题）。候选优先级：
+     **站点专属优先**——
+     javdb.com：格式为「**番号 + 标题内容**」，即同容器内的
+     `<savdiv class="sav-id">`（番号）与 `<strong class="current-title">`（标题）组合 →
+     "IPX-883 ズボラ義理姉の…加美杏奈"；取文本时**只拼接可见后代**（`visibleTextOf`），
+     `display:none` 的 `origin-title` / `顯示原標題` 不计入；
+     javbus.com：`.sav-id` 所在 `<h3>` 的可见文本 → "START-607 おねだり...恋渕ももな"；
+     不存在站点专属候选时才回退到 title 类元素 / 标题元素 / 链接文字 / 文本块，
+     显示在弹框最上面；
+   - **115 查重**：用页面权威番号（`savdiv.sav-id` 文本）GET 调用
      `https://webapi.115.com/files/search?offset=0&limit=30&search_value=<番号>&date=&aid=1&cid=0&pick_code=&type=&count_folders=1&source=&format=json`
      查询 115；遍历响应 `data`，若存在 `n` 以该番号开头（不区分大小写）的对象，
      则显示**红色「⚠️ 番号xxx已存在<所在目录>中」**（115 data 字段：文件用 `dp` 父目录名、
