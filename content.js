@@ -108,13 +108,66 @@
   }
 
   /**
-   * 获取页面上权威的番号（用户规范）：javdb/javbus 的 <savdiv class="sav-id"> 文本，
-   * 如 "START-602"。比从整串标题里解析更可靠（标题末尾可能是演员名等干扰）。
+   * 从指定容器内解析番号（用户规范）：
+   *  1) 容器内的 <savdiv class="sav-id">（javdb/javbus 常见形式）
+   *  2) 容器内形如 "字母-数字" 的子元素文本（如 <strong>FNS-260</strong>，部分页面
+   *     番号直接放在普通 strong 里、没有 sav-id）
+   *  3) 容器自身的可见文本开头若是番号格式也接受
+   * 返回番号字符串，找不到返回 ""
+   */
+  function codeFromContainer(container) {
+    if (!container || !isVisibleEl(container)) return "";
+    // 1) 容器内的 .sav-id
+    for (const sav of container.querySelectorAll(".sav-id")) {
+      if (!isVisibleEl(sav)) continue;
+      const t = (visibleTextOf(sav) || "").trim();
+      const m = t.match(/^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*/);
+      if (m) return m[0];
+    }
+    // 2) 容器内直接子元素：文本以 "字母-数字" 开头（跳过标题元素本身）
+    for (const child of container.children) {
+      if (!isVisibleEl(child)) continue;
+      if (child.classList && child.classList.contains("current-title")) continue;
+      const t = (visibleTextOf(child) || "").trim();
+      const m = t.match(/^([A-Za-z]+-\d+)\b/);
+      if (m) return m[1];
+    }
+    // 3) 容器自身文本开头
+    const self = (visibleTextOf(container) || "").trim();
+    const m2 = self.match(/^([A-Za-z]+-\d+)\b/);
+    if (m2) return m2[1];
+    return "";
+  }
+
+  /**
+   * 获取页面上权威的番号（用户规范）：
+   * 优先从「标题区域」解析（避免命中页面里其它影片的 sav-id，如相关推荐卡片）：
+   *  1) .current-title 所在的标题标签 / 父容器内的番号
+   *  2) 常见标题容器 h1/h2.title 内的番号
+   *  3) 页面上任意可见的 .sav-id（优先位于标题标签内的）
    */
   function getSavIdCode() {
-    for (const el of document.querySelectorAll(".sav-id")) {
-      if (!isVisibleEl(el)) continue; // 跳过隐藏的番号元素（display:none）
-      const t = (el.textContent || "").trim();
+    // 1) 标题区域（.current-title 所在容器）
+    const titleEl = document.querySelector(".current-title");
+    if (titleEl && isVisibleEl(titleEl)) {
+      const heading = titleEl.closest("h1,h2,h3,h4,h5,h6");
+      const code = codeFromContainer(heading || titleEl.parentElement);
+      if (code) return code;
+    }
+    // 2) 常见标题容器
+    for (const sel of ["h1.title", "h2.title", "h1", "h2"]) {
+      for (const el of document.querySelectorAll(sel)) {
+        if (!isVisibleEl(el)) continue;
+        const code = codeFromContainer(el);
+        if (code) return code;
+      }
+    }
+    // 3) 任意可见 .sav-id（优先位于标题标签内的）
+    const savList = [...document.querySelectorAll(".sav-id")].filter(isVisibleEl);
+    const inHeading = savList.find((el) => el.closest("h1,h2,h3,h4,h5,h6"));
+    const pick = inHeading || savList[0];
+    if (pick) {
+      const t = (pick.textContent || "").trim();
       const m = t.match(/^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*/);
       if (m) return m[0];
       if (t) return t;
@@ -166,13 +219,12 @@
   /**
    * 站点专属标题候选（用户规范）：
    *  - javdb.com：格式为「番号 + 标题内容」，即同容器内
-   *    <savdiv class="sav-id">（番号，如 IPX-883）+ <strong class="current-title">（标题）→
-   *    "IPX-883 ズボラ義理姉の…加美杏奈"；取文本时只拼接可见后代，
-   *    display:none 的 origin-title / 顯示原標題 不计入
+   *    <savdiv class="sav-id">（番号，如 IPX-883）或形如 <strong>FNS-260</strong> 的元素
+   *    + <strong class="current-title">（标题）→ "IPX-883 ズボラ義理姉の…加美杏奈"；
+   *    取文本时只拼接可见后代，display:none 的 origin-title / 顯示原標題 不计入
    *  - javbus.com：<h3> 内含 <savdiv class="sav-id infoFirst">（番号）+ 标题文字，
    *    取 h3 的可见文本 → "START-607 おねだり...恋渕ももな"
    *  - 优先级：番号+标题组合（javdb）→ 标题标签(h1~h6)可见文本 → 父元素可见文本
-   *  - 只保留「以字母/数字开头」的容器候选（组合后以番号开头）
    */
   function getSiteSpecificTitleCandidates() {
     const clean = (s) => String(s || "").replace(/\s+/g, " ").trim();
@@ -181,14 +233,14 @@
     const nonHeading = [];    // 父元素可见文本（列表页兜底）
 
     // 1) .current-title：取自身可见文本，并在前面补上同一容器内的番号 → "IPX-883 标题"
+    //    番号优先容器内 .sav-id，其次同级形如 "FNS-260" 的元素（部分页面无 sav-id）
     for (const el of document.querySelectorAll(".current-title")) {
       if (!isVisibleEl(el)) continue;
       let t = clean(visibleTextOf(el));
       if (!t) continue;
       const heading = el.closest("h1,h2,h3,h4,h5,h6");
       const scope = heading || el.parentElement || document;
-      const savEl = scope.querySelector ? scope.querySelector(".sav-id") : null;
-      const code = savEl && isVisibleEl(savEl) ? clean(visibleTextOf(savEl)) : "";
+      const code = codeFromContainer(scope);
       if (code && t.indexOf(code) !== 0) t = code + " " + t;
       withCode.push(t);
     }
